@@ -5,6 +5,7 @@ import string
 import gensim
 import operator
 import re
+import os
 
 from spacy.lang.en.stop_words import STOP_WORDS
 from gensim import corpora
@@ -17,10 +18,16 @@ class Search:
         self.punctuations = string.punctuation
         self.tokenized_list = list()
         self.corpus = None
-        self.dicitonary = None
+        self.dictionary = None
         self.tf_idf_model = None
         self.lsi_model = None
         self.index = None
+
+        self.dictionary_path = "dictionary.dict"
+        self.corpus_path = "corpus.mm"
+        self.tfidf_model_path = "tfidf_model.mm"
+        self.lsi_model_path = "lsi_model.mm"
+        self.index_path = "index.index"
 
     def tokenizer(self, sentence):
         if not isinstance(sentence, str):  
@@ -49,17 +56,33 @@ class Search:
 
     def corpus_definition(self):
         self.dictionary = corpora.Dictionary(self.tokenized_list)
-        #dictionary.filter_extremes(no_below=4, no_above=0.2)
-
+        
         stoplist = set('hello and if this can would should could tell ask stop come go')
         stop_ids = [self.dictionary.token2id[stopword] for stopword in stoplist if stopword in self.dictionary.token2id]
         self.dictionary.filter_tokens(stop_ids)
 
         self.corpus = [self.dictionary.doc2bow(desc) for desc in self.tokenized_list]
 
+    def model_init(self):
+        self.tf_idf_model = gensim.models.TfidfModel(self.corpus, id2word=self.dictionary)
+        self.lsi_model = gensim.models.LsiModel(self.tf_idf_model[self.corpus], id2word=self.dictionary, num_topics=300)
+        
+        self.dictionary.save(self.dictionary_path)
+        corpora.MmCorpus.serialize(self.corpus_path, self.corpus)
+        self.tf_idf_model.save(self.tfidf_model_path)
+        self.lsi_model.save(self.lsi_model_path)
+
+    def load_model(self):
+        self.dictionary = corpora.Dictionary.load(self.dictionary_path)
+        self.corpus = corpora.MmCorpus(self.corpus_path)
+        self.tf_idf_model = gensim.models.TfidfModel.load(self.tfidf_model_path)
+        self.lsi_model = gensim.models.LsiModel.load(self.lsi_model_path)
+        
+        self.index = MatrixSimilarity(self.lsi_model[self.corpus], num_features=self.lsi_model.num_topics)
+    
     def similarity_search(self, search_term):
         query_bow = self.dictionary.doc2bow(self.tokenizer(search_term))
-        query_tfidf = self.tfidf_model[query_bow]
+        query_tfidf = self.tf_idf_model[query_bow]
         query_lsi = self.lsi_model[query_tfidf]
 
         self.index.num_best = 5
@@ -75,30 +98,19 @@ class Search:
                     'Relevance': round((item[1] * 100),2),
                     'Value' : item[0]
                 }
-
             )
-            if j == (self.index.num_best-1):
+            if j == (self.index.num_best - 1):
                 break
 
-        return pd.DataFrame(result, columns=['Relevance','Value'])
-    
-    def model_init(self):
-        self.tfidf_model = gensim.models.TfidfModel(self.corpus, id2word=self.dictionary)
-        self.lsi_model = gensim.models.LsiModel(self.tfidf_model[self.corpus], id2word=self.dictionary, num_topics=300)
-
-        gensim.corpora.MmCorpus.serialize('tfidf_model_mm', self.tfidf_model[self.corpus])
-        gensim.corpora.MmCorpus.serialize('lsi_model_mm', self.lsi_model[self.tfidf_model[self.corpus]])
-    
-    def load_model(self):
-        self.tfidf_corpus = gensim.corpora.MmCorpus('tfidf_model_mm')
-        self.lsi_corpus = gensim.corpora.MmCorpus('lsi_model_mm')    
-        self.index = MatrixSimilarity(self.lsi_corpus, num_features = self.lsi_corpus.num_terms)
+        return pd.DataFrame(result, columns=['Relevance', 'Value'])
     
     def run(self, description_list, query):
-        self.preprocessing(description_list)
-        self.corpus_definition()
-        self.model_init()
+        if not (os.path.exists(self.dictionary_path) and os.path.exists(self.corpus_path)
+                and os.path.exists(self.tfidf_model_path) and os.path.exists(self.lsi_model_path)):
+            self.preprocessing(description_list)
+            self.corpus_definition()
+            self.model_init()
+        
         self.load_model()
 
         return self.similarity_search(query)
-        
